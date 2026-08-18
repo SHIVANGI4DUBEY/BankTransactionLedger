@@ -13,7 +13,7 @@ const userSchema = new mongoose.Schema({
     },
     name:{
         type:String,
-        required:[true,"NAme is required to create a user account"]
+        required:[true,"Name is required to create a user account"]
     },
     password:{
         type:String,
