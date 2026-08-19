@@ -22,7 +22,16 @@ const userSchema = new mongoose.Schema({
         //SECURITY MEASURE ->PASSWORD WILL NOT OCCUR IN RESPONSE OF ANY QUERY BY DEFAULT
         select:false
     }
- } ,{
+ ,
+ systemUser:{
+    type:Boolean,
+    default:false,
+    immutable:true,
+    select:false
+}
+
+ },
+ {
         timestamps:true
     
 })
