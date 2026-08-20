@@ -20,6 +20,13 @@ const accountModel = require("../models/account.model");
 const emailService = require("../services/email.service");
 
 
+/**
+ * ============================================================
+ * CREATE NORMAL TRANSACTION
+ * POST /api/transactions
+ * ============================================================
+ */
+
 async function createTransaction(req, res) {
 
   try {
@@ -69,9 +76,6 @@ async function createTransaction(req, res) {
 
     /**
      * 2. Validate idempotency key
-     *
-     * Prevents the same transaction from
-     * being processed multiple times.
      */
 
     const isTransactionAlreadyExists =
@@ -150,8 +154,6 @@ async function createTransaction(req, res) {
 
     /**
      * 4. Derive sender balance from ledger
-     *
-     * Ledger is the single source of truth.
      */
 
     const balance = await fromUserAccount.getBalance();
@@ -165,10 +167,7 @@ async function createTransaction(req, res) {
 
 
     /**
-     * 5-8. Database Transaction
-     *
-     * Either ALL database operations succeed
-     * or ALL of them are rolled back.
+     * 5-9. Database Transaction
      */
 
     const session = await mongoose.startSession();
@@ -254,10 +253,6 @@ async function createTransaction(req, res) {
 
       /**
        * 10. Send email notification
-       *
-       * Email is sent AFTER database commit.
-       * If email fails, the money transaction
-       * should not be rolled back.
        */
 
       await emailService.sendTransactionEmail(
@@ -279,10 +274,6 @@ async function createTransaction(req, res) {
       });
 
     } catch (error) {
-
-      /**
-       * Rollback database transaction
-       */
 
       await session.abortTransaction();
       session.endSession();
@@ -311,6 +302,270 @@ async function createTransaction(req, res) {
 }
 
 
+/**
+ * ============================================================
+ * CREATE INITIAL FUNDS TRANSACTION
+ * POST /api/transactions/system/initial-funds
+ *
+ * SYSTEM USER → USER ACCOUNT
+ * ============================================================
+ */
+
+async function createInitialFundsTransaction(req, res) {
+
+  try {
+
+    /**
+     * 1. Validate request
+     */
+
+    const {
+      toAccount,
+      amount,
+      idempotencyKey
+    } = req.body;
+
+    if (
+      !toAccount ||
+      !amount ||
+      !idempotencyKey
+    ) {
+      return res.status(400).json({
+        message:
+          "toAccount, amount and idempotencyKey are required"
+      });
+    }
+
+
+    /**
+     * 2. Find destination account
+     */
+
+    const toUserAccount = await accountModel.findOne({
+      _id: toAccount
+    });
+
+    if (!toUserAccount) {
+      return res.status(400).json({
+        message: "Invalid toAccount"
+      });
+    }
+
+
+    /**
+     * 3. Find System User's account
+     *
+     * authSystemUserMiddleware has already verified:
+     *
+     * req.user.systemUser === true
+     *
+     * Therefore we only need to find the
+     * account belonging to req.user.
+     */
+
+    const fromUserAccount = await accountModel.findOne({
+      user: req.user._id,
+      status: "Active"
+    });
+
+    if (!fromUserAccount) {
+      return res.status(400).json({
+        message: "System user account not found"
+      });
+    }
+
+
+    /**
+     * 4. Validate amount
+     */
+
+    if (amount <= 0) {
+      return res.status(400).json({
+        message: "Amount must be greater than zero"
+      });
+    }
+
+
+    /**
+     * Prevent System from sending to itself
+     */
+
+    if (
+      fromUserAccount._id.toString() ===
+      toUserAccount._id.toString()
+    ) {
+      return res.status(400).json({
+        message:
+          "System account and destination account cannot be the same"
+      });
+    }
+
+
+    /**
+     * 5. Idempotency check
+     */
+
+    const existingTransaction =
+      await transactionModel.findOne({
+        idempotencyKey
+      });
+
+    if (existingTransaction) {
+
+      if (existingTransaction.status === "Completed") {
+        return res.status(200).json({
+          message: "Initial funds transaction already processed",
+          transaction: existingTransaction
+        });
+      }
+
+      if (existingTransaction.status === "Pending") {
+        return res.status(200).json({
+          message: "Initial funds transaction is still in process"
+        });
+      }
+    }
+
+
+    /**
+     * 6. Start MongoDB transaction
+     */
+
+    const session = await mongoose.startSession();
+
+    try {
+
+      session.startTransaction();
+
+
+      /**
+       * 7. Create transaction
+       */
+
+      const transactionResult =
+        await transactionModel.create(
+          [
+            {
+              fromAccount: fromUserAccount._id,
+              toAccount: toUserAccount._id,
+              amount: amount,
+              idempotencyKey: idempotencyKey,
+              status: "Pending"
+            }
+          ],
+          { session }
+        );
+
+      const transaction = transactionResult[0];
+
+
+      /**
+       * 8. Debit System Account
+       */
+
+      await ledgerModel.create(
+        [
+          {
+            account: fromUserAccount._id,
+            amount: amount,
+            transaction: transaction._id,
+            type: "Debit"
+          }
+        ],
+        { session }
+      );
+
+
+      /**
+       * 9. Credit User Account
+       */
+
+      await ledgerModel.create(
+        [
+          {
+            account: toUserAccount._id,
+            amount: amount,
+            transaction: transaction._id,
+            type: "Credit"
+          }
+        ],
+        { session }
+      );
+
+
+      /**
+       * 10. Mark transaction as Completed
+       */
+
+      transaction.status = "Completed";
+
+      await transaction.save({
+        session
+      });
+
+
+      /**
+       * 11. Commit transaction
+       */
+
+      await session.commitTransaction();
+
+
+      /**
+       * Close session
+       */
+
+      session.endSession();
+
+
+      /**
+       * 12. Send response
+       */
+
+      return res.status(201).json({
+        message:
+          "Initial funds transaction completed successfully",
+        transaction: transaction
+      });
+
+    } catch (error) {
+
+      await session.abortTransaction();
+      session.endSession();
+
+      console.error(
+        "Initial funds transaction failed:",
+        error
+      );
+
+      return res.status(500).json({
+        message:
+          "Initial funds transaction processing failed",
+        error: error.message
+      });
+    }
+
+  } catch (error) {
+
+    console.error(
+      "Create initial funds transaction error:",
+      error
+    );
+
+    return res.status(500).json({
+      message: "Internal server error"
+    });
+  }
+}
+
+
+/**
+ * ============================================================
+ * EXPORTS
+ * ============================================================
+ */
+
 module.exports = {
-    createTransaction
+  createTransaction,
+  createInitialFundsTransaction
 };
