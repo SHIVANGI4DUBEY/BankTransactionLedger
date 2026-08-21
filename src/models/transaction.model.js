@@ -30,11 +30,14 @@ const transactionSchema=new mongoose.Schema({
         min:[0,"Transaction amount cannot be negative"]
     },
     //To track transcations
+    //index makes searching in lookup table fast
+    //unique ensures same transaction must not be repeated twice
     idempotencyKey:{
         type:String,
         required:[true,"Idempotency Key is required for creating a transaction"],
         index:true,
-        unique:true
+        unique:true,
+        
     }
 },{
     timestamps:true

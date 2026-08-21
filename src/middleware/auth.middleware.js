@@ -1,7 +1,7 @@
 //BEFORE CREATING ACCOUNT THIS MIDDLEWARE CHECKS FOR USER TO BE AUTHENTICATED
 const userModel =require("../models/user.model")
 const jwt =require("jsonwebtoken")
-
+const tokenBlacklistModel =require("../models/blackList.model")
 
 
 
@@ -17,6 +17,16 @@ async function authMiddleware(req,res,next){
             message:"Unauthorized access,token is missing"
         })
     }
+    //CHECK IF TOKEN IS BLACKLISTED
+
+    const isBlacklisted =await tokenBlacklistModel.findOne({token})
+if(isBlacklisted){
+    return res.status(401).json({
+        message:"Unauthorized access,token is invalid"
+    })
+}
+
+
 
     //verify token
     try{
@@ -45,6 +55,16 @@ if(!token){
         message:"Unauthorized access,token is missing"
     })
 }
+
+//CHECK IF TOKEN IS BLACKLISTED
+const isBlacklisted =await tokenBlacklistModel.findOne({token})
+if(isBlacklisted){
+    return res.status(401).json({
+        message:"Unauthorized access,token is invalid"
+    })
+}
+
+
 try{
     const decoded=jwt.verify(token,process.env.JWT_SECRET)
 

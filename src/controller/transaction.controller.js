@@ -165,6 +165,8 @@ async function createTransaction(req, res) {
       });
     }
 
+try{
+
 
     /**
      * 5-9. Database Transaction
@@ -175,6 +177,8 @@ async function createTransaction(req, res) {
     try {
 
       session.startTransaction();
+
+
 
 
       /**
@@ -213,7 +217,12 @@ async function createTransaction(req, res) {
         { session }
       );
 
+//setTimeout debit will be done which may take time so we credit after 100 secs
 
+     await(()=>{
+      return new Promise((resolve) => setTimeout(resolve,5000));
+
+     })()
       /**
        * 7. Create Credit Ledger Entry
        */
@@ -235,13 +244,9 @@ async function createTransaction(req, res) {
        * 8. Mark Transaction as Completed
        */
 
-      transaction.status = "Completed";
-
-      await transaction.save({
-        session
-      });
-
-
+     transaction.status = "Completed";
+     await transaction.save({ session });
+     
       /**
        * 9. Commit MongoDB transaction
        */
@@ -249,7 +254,12 @@ async function createTransaction(req, res) {
       await session.commitTransaction();
 
       session.endSession();
-
+    }
+    catch(error){
+      return res.status(400).json({
+        message:"Transcation is pending.please retry after some time"
+      })
+    }
 
       /**
        * 10. Send email notification
